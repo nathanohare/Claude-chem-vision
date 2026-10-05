@@ -12,7 +12,10 @@ parts vision alone is bad at:
 
 | Command | What it does |
 |---|---|
-| `pages` | Renders PDF pages to PNG, extracts embedded figures and page text |
+| `cdxml` | Reads a ChemDraw .cdxml: exact label text, yields and ee tied to each structure (SMILES too with RDKit) |
+| `docx-figures` | Extracts every figure from a Word document, converts EMF/WMF (pasted ChemDraw) to PNG, keeps real figure text |
+| `pages` | Renders PDF pages to PNG, extracts embedded figures and page text (falls back to Poppler without PyMuPDF) |
+| `grid` | Draws a labelled coordinate grid on an image so crop boxes can be read off it as fractions |
 | `crop` | Crops and upscales a region so small structures can be read closely |
 | `recognize` | Second opinion from OCSR: OSRA run as a 5-pass preprocessing ensemble with voting; MolScribe/DECIMER used if installed |
 | `build` | Builds a molecule from atom positions + wedge/hash bonds read off the drawing, so RDKit assigns R/S |
@@ -23,6 +26,10 @@ parts vision alone is bad at:
 | `annotate` | Compound IDs, yields, ee/er, dr, conversion, time, temperature next to structures; text-layer tables (Entry / Yield / ee columns) joined to structures by row |
 | `export` | Writes compound records to CSV, SDF or JSON, flagging inconsistent values |
 | `lookup` | PubChem name lookup by InChIKey/name/SMILES (needs network) |
+
+Without RDKit (for example where the package index is blocked), `cdxml`, `docx-figures`,
+`pages`, `grid`, `crop`, `annotate` and `lookup` still work; the validation commands exit
+with a JSON explanation and Claude falls back to careful visual reading.
 
 ## Install
 
