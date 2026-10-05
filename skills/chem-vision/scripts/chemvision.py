@@ -1088,7 +1088,7 @@ def cmd_cdxml(a):
             q = parent.get(q)
         return False
 
-    frags = []
+    frags, node_frag = [], {}
     for f in root.iter("fragment"):
         if inside_node(f):  # abbreviation expansion (Bn, Ts ...) inside an atom
             continue
@@ -1096,6 +1096,8 @@ def cmd_cdxml(a):
         if b and f.find("n") is not None:
             frags.append({"fragment_id": f.get("id"), "box_pt": b,
                           "atoms": sum(1 for _ in f.findall("n"))})
+            for n_ in f.iter("n"):
+                node_frag[str(n_.get("id"))] = f.get("id")
     labels = []
     for t in root.iter("t"):
         if inside_node(t):  # atom labels (N, Me, OMe ...)
@@ -1115,17 +1117,35 @@ def cmd_cdxml(a):
     notes = []
     if HAVE_RDKIT:
         try:
-            mols = Chem.MolsFromCDXMLFile(a.cdxml, sanitize=True, removeHs=True)
-            by_id, unmapped = {}, []
+            mols = [m for m in Chem.MolsFromCDXMLFile(a.cdxml, sanitize=True, removeHs=True) if m is not None]
+            # Tie each RDKit molecule to a fragment: by the fragment id RDKit records, else by the
+            # CDXML node ids carried on its atoms, else by document order when the counts agree.
+            by_id, unmapped, methods = {}, [], set()
             for m in mols:
-                if m is None:
-                    continue
-                fid = m.GetProp("CDXML_FRAG_ID") if m.HasProp("CDXML_FRAG_ID") else None
-                (by_id.__setitem__(str(fid), m) if fid is not None else unmapped.append(m))
+                fid = None
+                for prop in ("CDXML_FRAG_ID", "CDX_FRAG_ID"):
+                    if m.HasProp(prop):
+                        fid, method = str(m.GetProp(prop)), "fragment id"
+                        break
+                if fid is None or fid not in node_frag.values():
+                    hits = {node_frag.get(str(at.GetProp("CDX_ATOM_ID"))) for at in m.GetAtoms()
+                            if at.HasProp("CDX_ATOM_ID")} - {None}
+                    if len(hits) == 1:
+                        fid, method = hits.pop(), "atom ids"
+                if fid is not None and fid not in by_id:
+                    by_id[fid] = m
+                    methods.add(method)
+                else:
+                    unmapped.append(m)
+            if unmapped and not by_id and len(mols) == len(frags):
+                by_id = {f["fragment_id"]: m for f, m in zip(frags, mols)}
+                unmapped, methods = [], {"document order"}
+                notes.append("SMILES tied to structures by document order (RDKit gave no ids); spot-check one")
             for s_ in structs:
                 m = by_id.get(str(s_["fragment_id"]))
                 if m is not None:
                     s_["smiles"] = Chem.MolToSmiles(m)
+            res["smiles_mapping"] = sorted(methods)
             if unmapped:
                 notes.append(f"{len(unmapped)} RDKit molecules could not be tied to a fragment id; "
                              "their SMILES are listed under unmapped_smiles")
@@ -1149,6 +1169,7 @@ def cmd_cdxml(a):
                      "on one canvas). Check box_pt positions to pick the right one: " +
                      ", ".join(f"{k} x{len(v)}" for k, v in sorted(dups.items())))
     out({"cdxml": a.cdxml, "fragments": len(frags), "labelled_structures": len(labelled),
+         "smiles_mapping": res.get("smiles_mapping"), "unmapped_smiles": res.get("unmapped_smiles"),
          "structures": labelled if not a.all else structs,
          "unassigned_text": [] if a.id else [u.get("text") for u in res["unassigned_lines"]][:200],
          "notes": notes})

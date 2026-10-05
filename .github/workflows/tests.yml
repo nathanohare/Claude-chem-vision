@@ -10,4 +10,14 @@ jobs:
           python-version: "3.11"
       - run: sudo apt-get update && sudo apt-get install -y osra
       - run: pip install -r requirements.txt pytest
-      - run: python -m pytest -q tests/
+      - name: pytest
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q -rfE tests/ 2>&1 | tee pytest.log
+      - name: report failures as annotations
+        if: failure()
+        shell: bash
+        run: |
+          # Failing test names and assertion lines, visible on the PR and via the checks API.
+          grep -E "^(FAILED|ERROR) |^E   " pytest.log | head -10 | sed 's/^/::error::/' || true
