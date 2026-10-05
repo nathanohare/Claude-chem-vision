@@ -1,0 +1,10 @@
+sample1.png <- aspirin.png
+sample2.png <- boc_ester.png
+sample3.png <- caffeine_rot.png
+sample4.png <- paclitaxel.png
+sample5.png <- scheme_suzuki.png
+sample6.png <- strychnine.png
+sample7.png <- testosterone.png
+sample8.jpg <- atorvastatin.jpg
+sample9.jpg <- sildenafil_scan.jpg
+sample10.pdf <- mock_paper.pdf

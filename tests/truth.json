@@ -1,0 +1,15 @@
+{
+ "aspirin": "CC(=O)Oc1ccccc1C(=O)O",
+ "testosterone": "C[C@]12CC[C@H]3[C@@H](CCC4=CC(=O)CC[C@]34C)[C@@H]1CC[C@@H]2O",
+ "atorvastatin": "CC(C)c1c(C(=O)Nc2ccccc2)c(-c2ccccc2)c(-c2ccc(F)cc2)n1CC[C@@H](O)C[C@@H](O)CC(=O)O",
+ "boc_ester": "COC(=O)[C@H](Cc1ccc(OC)cc1)NC(=O)OC(C)(C)C",
+ "paclitaxel": "CC1=C2[C@@]([C@]([C@H]([C@@H]3[C@]4([C@H](OC4)C[C@@H]([C@]3(C(=O)[C@@H]2OC(=O)C)C)O)OC(=O)C)OC(=O)c5ccccc5)(C[C@@H]1OC(=O)[C@H](O)[C@@H](NC(=O)c6ccccc6)c7ccccc7)O)(C)C",
+ "strychnine": "O=C7N2c1ccccc1[C@@]64[C@@H]2[C@@H]3[C@@H](OC/C=C5\\[C@@H]3C[C@@H]6N(CC4)C5)C7",
+ "caffeine_rot": "Cn1cnc2c1c(=O)n(C)c(=O)n2C",
+ "sildenafil_scan": "CCCc1nn(C)c2c1nc([nH]c2=O)-c1cc(ccc1OCC)S(=O)(=O)N1CCN(C)CC1",
+ "scheme_1": "COc1ccc(Br)cc1",
+ "scheme_2": "OB(O)c1ccc(C=O)cc1",
+ "scheme_3": "COc1ccc(-c2ccc(C=O)cc2)cc1",
+ "scheme_4": "COc1ccc(-c2ccc(CO)cc2)cc1",
+ "scheme_rxn": "COc1ccc(Br)cc1.OB(O)c1ccc(C=O)cc1>>COc1ccc(-c2ccc(C=O)cc2)cc1"
+}

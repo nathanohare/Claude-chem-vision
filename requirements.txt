@@ -1,0 +1,7 @@
+rdkit>=2024.3
+pymupdf>=1.24
+pillow>=10
+
+# Optional deep-learning recognizers (need model downloads from Hugging Face / Zenodo):
+# molscribe   (set MOLSCRIBE_CKPT to a local checkpoint, or allow huggingface.co)
+# decimer
