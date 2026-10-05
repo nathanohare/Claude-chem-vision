@@ -10,7 +10,10 @@ re-rendering a proposed SMILES so it can be compared against the original.
 Every subcommand prints JSON to stdout so results are easy to read back.
 
 Subcommands
-  pages      Render PDF pages to PNG (and list embedded images).
+  pages      Render PDF pages to PNG (and list embedded images); --grid adds overlays.
+  grid       Draw a labeled coordinate grid on any image (for choosing crop boxes).
+  docx-figures  Extract embedded figures (EMF/WMF/PNG/JPEG) from a .docx as PNGs.
+  cdxml      Read a ChemDraw .cdxml: label text tied to each structure (+ SMILES with RDKit).
   crop       Crop (and upscale) a region of an image to look at it closely.
   recognize  Run OCSR engines (OSRA, MolScribe, DECIMER) on an image.
   build      Build a molecule from drawn atom positions and wedge/hash bonds.
@@ -21,7 +24,10 @@ Subcommands
   annotate   Compound IDs, yields, ee/er, dr printed next to structures.
   export     Write compound records (ID, SMILES, yield, ee, ...) to CSV/SDF/JSON.
   lookup     Look a structure up on PubChem by InChIKey or name (needs network).
-  engines    Report which OCSR engines are available.
+  engines    Report which engines and dependencies are available.
+
+Commands that do not need RDKit: pages, grid, crop, docx-figures, cdxml
+(labels only), annotate (--text / --labels / --pdf), lookup, engines.
 """
 import argparse
 import json
@@ -34,11 +40,32 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rdkit import Chem, RDLogger
-from rdkit.Chem import AllChem, Descriptors, DataStructs, Draw, rdFingerprintGenerator, rdMolDescriptors
-from rdkit.Chem.Draw import rdMolDraw2D
+try:
+    from rdkit import Chem, RDLogger
+    from rdkit.Chem import AllChem, Descriptors, DataStructs, Draw, rdFingerprintGenerator, rdMolDescriptors
+    from rdkit.Chem.Draw import rdMolDraw2D
 
-RDLogger.DisableLog("rdApp.*")
+    RDLogger.DisableLog("rdApp.*")
+    HAVE_RDKIT, RDKIT_ERROR = True, None
+except Exception as _e:  # not installed, or install blocked (e.g. network allowlist)
+    HAVE_RDKIT, RDKIT_ERROR = False, f"{type(_e).__name__}: {_e}"
+
+# Subcommands that cannot run at all without RDKit.
+RDKIT_COMMANDS = {"recognize", "check", "render", "build", "compare", "reaction", "export"}
+RDKIT_MISSING = {
+    "error": "RDKit is not available in this environment",
+    "detail": None,
+    "unavailable": ["recognize (OCSR second opinion)", "check (SMILES validation, formula, MW, InChIKey)",
+                    "render (redraw-and-compare)", "build (stereo from drawing)", "compare", "reaction",
+                    "export", "cdxml structures (labels still work)"],
+    "still_available": ["pages", "grid", "crop", "docx-figures", "cdxml (label text, values, positions)",
+                        "annotate --text / --labels / --pdf", "lookup", "engines"],
+    "what_to_do": "Continue by reading the structure visually and say in the report that SMILES, "
+                  "stereodescriptors and formulas are unvalidated. To fix: `pip install rdkit`. If pip "
+                  "reports 'No matching distribution' or PyPI returns 403, the package index is blocked by "
+                  "this environment's network allowlist; retrying with other commands will not help. Run the "
+                  "plugin on a machine where rdkit installs, or ask an org admin to allow PyPI.",
+}
 
 
 def out(obj):
@@ -48,7 +75,10 @@ def out(obj):
 # ---------------------------------------------------------------- pages / crop
 
 def cmd_pages(a):
-    import pymupdf as fitz
+    try:
+        import pymupdf as fitz
+    except Exception:
+        return pages_poppler(a)
 
     doc = fitz.open(a.pdf)
     os.makedirs(a.outdir, exist_ok=True)
@@ -61,6 +91,8 @@ def cmd_pages(a):
         path = os.path.join(a.outdir, f"{stem}_p{i + 1}.png")
         pix.save(path)
         entry = {"page": i + 1, "png": path, "size": [pix.width, pix.height]}
+        if a.grid:
+            entry["grid"] = draw_grid(path, path[:-4] + "_grid.png")
         if a.images:
             imgs = []
             for j, info in enumerate(page.get_images(full=True)):
@@ -136,8 +168,10 @@ def is_dark(im):
 # ------------------------------------------------------------------- recognize
 
 def engines_available():
-    from rdkit import __version__ as rdkit_version
-
+    if HAVE_RDKIT:
+        from rdkit import __version__ as rdkit_version
+    else:
+        rdkit_version = None
     eng = {"rdkit": rdkit_version, "osra": bool(shutil.which("osra"))}
     for name, mod in (("molscribe", "molscribe"), ("decimer", "DECIMER")):
         try:
@@ -388,7 +422,7 @@ GROUPS = {
     "acyl halide": "C(=O)[Cl,Br,F,I]",
     "anhydride": "C(=O)OC(=O)",
 }
-_GROUP_PATTERNS = {k: Chem.MolFromSmarts(v) for k, v in GROUPS.items()}
+_GROUP_PATTERNS = {k: Chem.MolFromSmarts(v) for k, v in GROUPS.items()} if HAVE_RDKIT else {}
 
 
 def summarize(smiles, brief=False):
@@ -512,7 +546,7 @@ def cmd_render(a):
     out({"image": a.out, "panels": (["original"] if a.original else []) + list(a.smiles)})
 
 
-_MORGAN = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
+_MORGAN = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048) if HAVE_RDKIT else None
 
 
 def fp(m):
@@ -627,7 +661,9 @@ def cmd_annotate(a):
             r = ann.annotate_text(text)
             ids = r.pop("ids")
             rec = {"id": ids[0] if ids else None, **{k: v for k, v in r.items()}}
-            if struct.endswith(".mol") and os.path.exists(struct):
+            if struct.endswith(".mol") and os.path.exists(struct) and not HAVE_RDKIT:
+                rec.update({"smiles": None, "molfile": struct, "note": "RDKit missing: SMILES not derived"})
+            elif struct.endswith(".mol") and os.path.exists(struct):
                 m = Chem.MolFromMolFile(struct)
                 rec.update({"smiles": Chem.MolToSmiles(m) if m else None, "molfile": struct})
             else:
@@ -843,7 +879,300 @@ def cmd_lookup(a):
 
 
 def cmd_engines(a):
-    out(engines_available())
+    eng = engines_available()
+    try:
+        import pymupdf  # noqa: F401
+        eng["pymupdf"] = True
+    except Exception:
+        eng["pymupdf"] = False
+    eng["poppler"] = bool(shutil.which("pdftoppm"))
+    eng["libreoffice"] = bool(shutil.which("soffice") or shutil.which("libreoffice"))
+    if not HAVE_RDKIT:
+        eng["rdkit_missing"] = {**RDKIT_MISSING, "detail": RDKIT_ERROR}
+    if not eng["pymupdf"]:
+        eng["pymupdf_note"] = ("PyMuPDF missing: `pages` falls back to Poppler (pdftoppm/pdftotext/pdfimages); "
+                               "`annotate --pdf` needs PyMuPDF.") if eng["poppler"] else \
+            "PyMuPDF and Poppler both missing: PDF pages cannot be rendered."
+    out(eng)
+
+
+# ------------------------------------------------- pages fallback / grid overlay
+
+def pages_poppler(a):
+    """`pages` without PyMuPDF: render with Poppler's command-line tools."""
+    if not shutil.which("pdftoppm"):
+        out({"error": "Neither PyMuPDF nor Poppler (pdftoppm) is available; cannot render PDF pages."})
+        sys.exit(3)
+    info = subprocess.run(["pdfinfo", a.pdf], capture_output=True, text=True).stdout
+    m = re.search(r"^Pages:\s+(\d+)", info, re.M)
+    n = int(m.group(1)) if m else 1
+    os.makedirs(a.outdir, exist_ok=True)
+    pages = parse_range(a.pages, n) if a.pages else range(n)
+    stem = os.path.splitext(os.path.basename(a.pdf))[0]
+    result = []
+    from PIL import Image
+    for i in pages:
+        base = os.path.join(a.outdir, f"{stem}_p{i + 1}")
+        subprocess.run(["pdftoppm", "-png", "-r", str(a.dpi), "-f", str(i + 1), "-l", str(i + 1),
+                        "-singlefile", a.pdf, base], check=True)
+        path = base + ".png"
+        with Image.open(path) as im:
+            entry = {"page": i + 1, "png": path, "size": list(im.size)}
+        if a.grid:
+            entry["grid"] = draw_grid(path, base + "_grid.png")
+        if a.images and shutil.which("pdfimages"):
+            idir = base + "_img"
+            os.makedirs(idir, exist_ok=True)
+            subprocess.run(["pdfimages", "-png", "-f", str(i + 1), "-l", str(i + 1), a.pdf,
+                            os.path.join(idir, "img")], check=False)
+            imgs = []
+            for f in sorted(os.listdir(idir)):
+                fp_ = os.path.join(idir, f)
+                with Image.open(fp_) as im:
+                    if im.width >= 80 and im.height >= 80:
+                        imgs.append({"png": fp_, "size": list(im.size), "page_rect_pt": None})
+            entry["embedded_images"] = imgs
+        if a.text and shutil.which("pdftotext"):
+            entry["text"] = subprocess.run(["pdftotext", "-layout", "-f", str(i + 1), "-l", str(i + 1),
+                                            a.pdf, "-"], capture_output=True, text=True).stdout
+        result.append(entry)
+    out({"pdf": a.pdf, "page_count": n, "backend": "poppler (PyMuPDF not installed)", "pages": result,
+         "note": "embedded image page positions (page_rect_pt) are unavailable without PyMuPDF"})
+
+
+def draw_grid(src, dst, step=0.1, max_w=1400):
+    """Write a downscaled copy of `src` with labeled gridlines every `step`
+    (as a fraction of width/height). Labels give the fraction and the
+    full-resolution pixel coordinate, so a box chosen on this view can be passed
+    to `crop --box` directly as fractions (preferred) or full-res pixels."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    im = Image.open(src).convert("RGB")
+    W, H = im.size
+    k = min(1.0, max_w / W)
+    v = im.resize((int(W * k), int(H * k)), Image.LANCZOS) if k < 1 else im.copy()
+    w, h = v.size
+    d = ImageDraw.Draw(v)
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", max(10, w // 90))
+    except Exception:
+        font = ImageFont.load_default()
+    n = int(round(1 / step))
+    for i in range(n + 1):
+        f = i * step
+        x, y = int(f * (w - 1)), int(f * (h - 1))
+        col = (220, 0, 0) if i % 5 == 0 else (255, 120, 120)
+        d.line([(x, 0), (x, h)], fill=col, width=1)
+        d.line([(0, y), (w, y)], fill=col, width=1)
+        if 0 < i < n:
+            d.text((x + 2, 2), f"{f:.1f}|{int(f * W)}", fill=(200, 0, 0), font=font)
+            d.text((2, y + 2), f"{f:.1f}|{int(f * H)}", fill=(200, 0, 0), font=font)
+    v.save(dst)
+    return {"grid_png": dst, "full_size": [W, H], "view_size": [w, h], "step": step,
+            "how_to_use": "labels read fraction|full-res-px; pass crop --box as fractions, e.g. 0.30,0.40,0.55,0.62"}
+
+
+def cmd_grid(a):
+    dst = a.out or os.path.splitext(a.image)[0] + "_grid.png"
+    out(draw_grid(a.image, dst, step=a.step, max_w=a.max_width))
+
+
+# ---------------------------------------------------------------- docx figures
+
+def cmd_docx_figures(a):
+    """Extract every embedded figure from a .docx in document order and convert
+    vector formats (EMF/WMF, typical for pasted ChemDraw) to PNG at --dpi.
+    Each EMF is converted via PDF so any real text it carries can be reported."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    from PIL import Image
+
+    os.makedirs(a.outdir, exist_ok=True)
+    z = zipfile.ZipFile(a.docx)
+    rels = {}
+    if "word/_rels/document.xml.rels" in z.namelist():
+        for r in ET.fromstring(z.read("word/_rels/document.xml.rels")):
+            rels[r.get("Id")] = r.get("Target")
+    W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    order, context = [], {}
+    body = ET.fromstring(z.read("word/document.xml"))
+    paras = list(body.iter(W + "p"))
+    for pi, para in enumerate(paras):
+        for el in para.iter():
+            rid = el.get(R + "embed") or el.get(R + "id")
+            if rid and rid in rels and "media/" in rels[rid] and rid not in order:
+                order.append(rid)
+                txt = lambda q: "".join(t.text or "" for t in q.iter(W + "t")).strip()
+                near = [txt(paras[j]) for j in (pi - 1, pi, pi + 1) if 0 <= j < len(paras)]
+                context[rid] = " … ".join(x for x in near if x)[:300]
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    figs = []
+    for n, rid in enumerate(order, 1):
+        target = rels[rid]
+        name = "word/" + target if not target.startswith("word/") else target
+        ext = os.path.splitext(target)[1].lower()
+        raw = os.path.join(a.outdir, f"fig{n}{ext}")
+        with open(raw, "wb") as fh:
+            fh.write(z.read(name))
+        rec = {"figure": n, "source": target, "format": ext.lstrip("."), "nearby_text": context.get(rid, "")}
+        try:
+            if ext in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff"):
+                png = os.path.join(a.outdir, f"fig{n}.png")
+                Image.open(raw).convert("RGB").save(png)
+                rec["png"] = png
+            elif ext in (".emf", ".wmf", ".svg") and soffice:
+                tmp = tempfile.mkdtemp()
+                subprocess.run([soffice, "--headless", "--convert-to", "pdf", "--outdir", tmp, raw],
+                               capture_output=True, timeout=300)
+                base = os.path.join(a.outdir, f"fig{n}")
+                pdf = base + ".pdf"
+                shutil.move(os.path.join(tmp, f"fig{n}.pdf"), pdf)
+                subprocess.run(["pdftoppm", "-png", "-r", str(a.dpi), "-singlefile", pdf, base], check=True)
+                rec["png"] = base + ".png"
+                rec["pdf"] = pdf
+                if shutil.which("pdftotext"):
+                    t = subprocess.run(["pdftotext", pdf, "-"], capture_output=True, text=True).stdout.strip()
+                    rec["text_layer"] = bool(t)
+                    if t:
+                        rec["title"] = t.splitlines()[0].strip()[:120]
+                        rec["text"] = t[:6000]
+                        rec["note"] = ("real text: labels/values are exact. `annotate --pdf <this pdf> --page 1` "
+                                       "ties them to structures (needs PyMuPDF); otherwise search `text`")
+                    else:
+                        rec["note"] = "no real text in this figure: read labels and values visually"
+            else:
+                rec["error"] = f"cannot convert {ext} (LibreOffice missing?)"
+            if "png" in rec:
+                from PIL import ImageChops
+                im = Image.open(rec["png"]).convert("RGB")
+                bg = Image.new("RGB", im.size, (255, 255, 255))
+                bb = ImageChops.difference(im, bg).getbbox()
+                if bb and (bb[2] - bb[0]) * (bb[3] - bb[1]) < 0.95 * im.width * im.height:
+                    pad = 12
+                    bb = (max(0, bb[0] - pad), max(0, bb[1] - pad), min(im.width, bb[2] + pad), min(im.height, bb[3] + pad))
+                    im.crop(bb).save(rec["png"])
+                    rec["trimmed_from"] = list(im.size)
+                    im = Image.open(rec["png"])
+                rec["size"] = list(im.size)
+                if a.grid:
+                    rec["grid"] = draw_grid(rec["png"], rec["png"][:-4] + "_grid.png")
+        except Exception as e:
+            rec["error"] = f"{type(e).__name__}: {e}"
+        figs.append(rec)
+    out({"docx": a.docx, "figure_count": len(figs), "figures": figs,
+         "hint": "If the document's ChemDraw source (.cdxml/.cdx) is available, run `cdxml` on it instead: exact text and structures."})
+
+
+# ----------------------------------------------------------------------- cdxml
+
+def cmd_cdxml(a):
+    """Read a ChemDraw CDXML file: every structure (fragment) with its bounding
+    box, the caption text objects (compound labels, yields, ee ...), and the
+    labels tied to structures by position. With RDKit, also SMILES per fragment."""
+    import xml.etree.ElementTree as ET
+    import annotations as ann
+
+    root = ET.parse(a.cdxml).getroot()
+    parent = {c: p for p in root.iter() for c in p}
+
+    def bbox(el):
+        b = el.get("BoundingBox")
+        return [float(v) for v in b.split()] if b else None
+
+    def inside_node(el):
+        q = parent.get(el)
+        while q is not None:
+            if q.tag == "n":
+                return True
+            q = parent.get(q)
+        return False
+
+    frags, node_frag = [], {}
+    for f in root.iter("fragment"):
+        if inside_node(f):  # abbreviation expansion (Bn, Ts ...) inside an atom
+            continue
+        b = bbox(f)
+        if b and f.find("n") is not None:
+            frags.append({"fragment_id": f.get("id"), "box_pt": b,
+                          "atoms": sum(1 for _ in f.findall("n"))})
+            for n_ in f.iter("n"):
+                node_frag[str(n_.get("id"))] = f.get("id")
+    labels = []
+    for t in root.iter("t"):
+        if inside_node(t):  # atom labels (N, Me, OMe ...)
+            continue
+        text = "".join(s_.text or "" for s_ in t.iter("s")).strip()
+        b = bbox(t)
+        if text and b:
+            labels.append({"text": text, "box": b})
+
+    res = ann.annotate_labels([f["box_pt"] for f in frags], labels, a.max_dist) if frags else \
+        {"structures": [], "unassigned_lines": labels}
+    structs = []
+    for f, s_ in zip(frags, res["structures"]):
+        s_.pop("box", None)
+        structs.append({**f, **s_})
+
+    notes = []
+    if HAVE_RDKIT:
+        try:
+            mols = [m for m in Chem.MolsFromCDXMLFile(a.cdxml, sanitize=True, removeHs=True) if m is not None]
+            # Tie each RDKit molecule to a fragment: by the fragment id RDKit records, else by the
+            # CDXML node ids carried on its atoms, else by document order when the counts agree.
+            by_id, unmapped, methods = {}, [], set()
+            for m in mols:
+                fid = None
+                for prop in ("CDXML_FRAG_ID", "CDX_FRAG_ID"):
+                    if m.HasProp(prop):
+                        fid, method = str(m.GetProp(prop)), "fragment id"
+                        break
+                if fid is None or fid not in node_frag.values():
+                    hits = {node_frag.get(str(at.GetProp("CDX_ATOM_ID"))) for at in m.GetAtoms()
+                            if at.HasProp("CDX_ATOM_ID")} - {None}
+                    if len(hits) == 1:
+                        fid, method = hits.pop(), "atom ids"
+                if fid is not None and fid not in by_id:
+                    by_id[fid] = m
+                    methods.add(method)
+                else:
+                    unmapped.append(m)
+            if unmapped and not by_id and len(mols) == len(frags):
+                by_id = {f["fragment_id"]: m for f, m in zip(frags, mols)}
+                unmapped, methods = [], {"document order"}
+                notes.append("SMILES tied to structures by document order (RDKit gave no ids); spot-check one")
+            for s_ in structs:
+                m = by_id.get(str(s_["fragment_id"]))
+                if m is not None:
+                    s_["smiles"] = Chem.MolToSmiles(m)
+            res["smiles_mapping"] = sorted(methods)
+            if unmapped:
+                notes.append(f"{len(unmapped)} RDKit molecules could not be tied to a fragment id; "
+                             "their SMILES are listed under unmapped_smiles")
+                res["unmapped_smiles"] = [Chem.MolToSmiles(m) for m in unmapped]
+        except Exception as e:
+            notes.append(f"RDKit could not parse structures: {type(e).__name__}: {e}")
+    else:
+        notes.append("RDKit missing: labels and values are exact, but no SMILES were derived. "
+                     "Read the structures from the figure and use `annotate --pair`.")
+
+    if a.id:
+        want = set(a.id)
+        structs = [s_ for s_ in structs if s_.get("compound_id") in want]
+    labelled = [s_ for s_ in structs if s_.get("compound_id")]
+    seen = {}
+    for s_ in labelled:
+        seen.setdefault(s_["compound_id"], []).append(s_["fragment_id"])
+    dups = {k: v for k, v in seen.items() if len(v) > 1}
+    if dups:
+        notes.append("Some compound IDs label more than one structure (several schemes or old versions "
+                     "on one canvas). Check box_pt positions to pick the right one: " +
+                     ", ".join(f"{k} x{len(v)}" for k, v in sorted(dups.items())))
+    out({"cdxml": a.cdxml, "fragments": len(frags), "labelled_structures": len(labelled),
+         "smiles_mapping": res.get("smiles_mapping"), "unmapped_smiles": res.get("unmapped_smiles"),
+         "structures": labelled if not a.all else structs,
+         "unassigned_text": [] if a.id else [u.get("text") for u in res["unassigned_lines"]][:200],
+         "notes": notes})
 
 
 # ----------------------------------------------------------------------- main
@@ -859,7 +1188,29 @@ def main():
     p.add_argument("--pages", help="e.g. 1,3-5 (1-based)")
     p.add_argument("--images", action="store_true", help="also extract embedded raster images")
     p.add_argument("--text", action="store_true", help="include page text (for compound numbers, captions)")
+    p.add_argument("--grid", action="store_true", help="also write a labeled grid overlay per page (for crop boxes)")
     p.set_defaults(func=cmd_pages)
+
+    p = sp.add_parser("grid", help="draw a labeled coordinate grid on an image")
+    p.add_argument("image")
+    p.add_argument("--step", type=float, default=0.1, help="grid spacing as a fraction (default 0.1)")
+    p.add_argument("--max-width", type=int, default=1400, help="width of the overlay view in px")
+    p.add_argument("-o", "--out")
+    p.set_defaults(func=cmd_grid)
+
+    p = sp.add_parser("docx-figures", help="extract embedded figures from a .docx as PNG")
+    p.add_argument("docx")
+    p.add_argument("--outdir", default="chemvision_docx")
+    p.add_argument("--dpi", type=int, default=300, help="render resolution for EMF/WMF figures")
+    p.add_argument("--grid", action="store_true", help="also write a grid overlay per figure")
+    p.set_defaults(func=cmd_docx_figures)
+
+    p = sp.add_parser("cdxml", help="read labels (and SMILES with RDKit) from a ChemDraw .cdxml")
+    p.add_argument("cdxml")
+    p.add_argument("--id", nargs="+", help="only these compound IDs, e.g. --id 3m 4a")
+    p.add_argument("--all", action="store_true", help="include unlabelled structures")
+    p.add_argument("--max-dist", type=float, help="max label distance from a structure, in points")
+    p.set_defaults(func=cmd_cdxml)
 
     p = sp.add_parser("crop", help="crop and upscale a region")
     p.add_argument("image")
@@ -945,6 +1296,9 @@ def main():
     p.set_defaults(func=cmd_engines)
 
     a = ap.parse_args()
+    if a.cmd in RDKIT_COMMANDS and not HAVE_RDKIT:
+        out({**RDKIT_MISSING, "command": a.cmd, "detail": RDKIT_ERROR})
+        sys.exit(3)
     a.func(a)
 
 

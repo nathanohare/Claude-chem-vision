@@ -1,6 +1,6 @@
 ---
 name: chem-vision
-description: Read chemical structures and reaction schemes from images, figures, PDFs and scientific papers and turn them into SMILES with formulas, names, compound IDs, yields, ee/er and dr. Use whenever a user shares or points to a molecule drawing, skeletal formula, reaction scheme, synthetic route, or a paper/PDF page containing them and wants it identified, transcribed, checked, compared or explained.
+description: Read chemical structures and reaction schemes from images, figures, PDFs, Word documents, ChemDraw files and scientific papers and turn them into SMILES with formulas, names, compound IDs, yields, ee/er and dr. Use whenever a user shares or points to a molecule drawing, skeletal formula, reaction scheme, synthetic route, or a paper/PDF page containing them and wants it identified, transcribed, checked, compared or explained.
 ---
 
 # Reading chemical structures and schemes
@@ -19,8 +19,50 @@ CV="python3 ${CLAUDE_PLUGIN_ROOT}/skills/chem-vision/scripts/chemvision.py"
 ```
 (If `CLAUDE_PLUGIN_ROOT` is unset, use the path of this skill's `scripts/`
 directory.) Every subcommand prints JSON. Run `$CV engines` once to see the RDKit
-version and which recognizers are installed; if it fails because RDKit is
-missing, run the plugin's `setup.sh`.
+version and which recognizers are installed. If RDKit or PyMuPDF is missing,
+run the plugin's `setup.sh` once; then follow **If RDKit is missing** below
+for anything it could not install.
+
+## If RDKit is missing
+
+`engines` reports `"rdkit": null` with an `rdkit_missing` block when RDKit
+could not be installed. If `setup.sh` or pip says "No matching distribution"
+or returns 403, the package index is blocked by the environment's network
+allowlist: do not retry with other install commands, mirrors or downloads.
+Tell the user once, in one sentence, then carry on:
+
+- Still available: `pages` (falls back to Poppler without PyMuPDF), `grid`,
+  `crop`, `docx-figures`, `cdxml` (exact labels and values, no SMILES),
+  `annotate --text/--labels/--pair`, `lookup`.
+- Unavailable (they exit with code 3 and a JSON explanation): `recognize`,
+  `check`, `render`, `build`, `compare`, `reaction`, `export`.
+- Read structures visually and write SMILES by hand. Say in the report that
+  the SMILES, formula and any R/S assignment are unvalidated, and give the
+  stereodescriptor only with a stated confidence.
+- The fix is to run the plugin where `pip install rdkit` succeeds (for
+  example the user's own computer), or for an org admin to allow PyPI.
+
+## Step 0: choose the best source
+
+Work from the most exact source available, in this order:
+
+1. **ChemDraw source (`.cdxml`)**: if the user has one, or one sits next to
+   the document (same folder, a name like "schemes" or "scope"), use it:
+   `$CV cdxml schemes.cdxml --id 3m` (or no `--id` for every labelled
+   structure). Labels, yields and ee come back exact and tied to each
+   structure by position; with RDKit, each structure's SMILES too. One
+   canvas can hold several schemes or old versions, so the same ID may
+   appear twice: the `notes` say so, and `box_pt` tells you which is which.
+   Confirm with the user which scheme is current if it matters. `.cdx`
+   (binary) is not supported by the XML reader; ask for a `.cdxml` export.
+2. **Word document (`.docx`)**: `$CV docx-figures paper.docx --grid`
+   extracts every embedded figure in document order, converts EMF/WMF
+   (pasted ChemDraw) to PNG, trims page margins, and returns each figure's
+   `title` ("Scheme 2. Scope of ...") and its real `text` when the figure
+   has a text layer (EMF from ChemDraw usually does). Search `text` for the
+   compound ID to get exact values. Do not convert the whole .docx to PDF:
+   that loses figure text and resolution.
+3. **PDF or image**: the page-rendering workflow below.
 
 ## Workflow
 
@@ -44,6 +86,12 @@ missing, run the plugin's `setup.sh`.
      returns them). Only the first kind gives text-layer labels.
 
 2. **Zoom in.** Small or dense structures are where reading errors come from.
+   Find the structure on a grid first: `pages --grid` (or `docx-figures
+   --grid`, or `$CV grid image.png`) writes a downscaled view with gridlines
+   labelled `fraction|full-res-px`. **Choose crop boxes from that view and
+   pass them as 0-1 fractions**: fractions are the same on every scale, so
+   the first crop lands. Never estimate pixel coordinates from a downscaled
+   view and apply them to the full-resolution image.
    Crop each structure (or each step of a scheme) and upscale:
    `$CV crop page.png --box 0.1,0.35,0.55,0.6 --scale 2 -o s1.png`
    (`--box` takes pixels or 0-1 fractions; `--pad` adds 10 px on each side
