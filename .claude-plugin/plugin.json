@@ -1,0 +1,7 @@
+{
+  "name": "chem-vision",
+  "version": "0.1.0",
+  "description": "Lets Claude read chemical structures and reaction schemes from images, figures and PDFs: page rendering and zoom, OCSR second opinion (OSRA, optional MolScribe/DECIMER), RDKit validation, and redraw-and-compare checking.",
+  "author": { "name": "Nate" },
+  "keywords": ["chemistry", "OCSR", "SMILES", "RDKit", "reaction schemes", "papers"]
+}

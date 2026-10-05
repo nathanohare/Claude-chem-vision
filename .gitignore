@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+chemvision_pages/
+render.png
+crop.png
+.pytest_cache/
+tests/images/

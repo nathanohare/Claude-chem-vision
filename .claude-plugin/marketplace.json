@@ -1,0 +1,16 @@
+{
+  "name": "chem-vision",
+  "owner": {
+    "name": "Nate"
+  },
+  "plugins": [
+    {
+      "name": "chem-vision",
+      "source": "./",
+      "description": "Read chemical structures, reaction schemes, compound IDs, yields and ee from papers and images."
+    }
+  ],
+  "metadata": {
+    "description": "Claude plugin for reading chemical structures, reaction schemes and compound data from papers."
+  }
+}
